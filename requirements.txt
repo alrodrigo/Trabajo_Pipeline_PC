@@ -1,0 +1,12 @@
+# Motor de procesamiento de datos
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# Exportación y Big Data
+pyarrow>=14.0.0
+
+# Interfaz Gráfica Moderna
+customtkinter>=5.2.0
+
+# Empaquetado (Solo para desarrollo, no necesario para ejecución)
+pyinstaller>=6.0.0

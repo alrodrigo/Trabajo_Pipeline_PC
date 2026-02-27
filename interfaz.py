@@ -1,159 +1,294 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext
+"""
+Interfaz gráfica moderna (CustomTkinter) para el pipeline P&C.
+Conectada al nuevo motor robusto de procesamiento y base de datos.
+"""
+
 import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from datetime import datetime
 from pathlib import Path
-#importamos el motor de datos
+import customtkinter as ctk
+
+# Importamos nuestro motor y configuración
 from src.ajustes import FILESERVER_LOCAL, FILESERVER_PRODUCCION
 from src.procesador_principal import ProcesadorPrincipal
+from src.gestor_historial import GestorHistorial
 
-class AplicacionGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Pipeline P&C - Codelco")
-        self.root.geometry("850x650")
-        self.root.resizable(False, False)
+# Configuración visual base de CustomTkinter
+ctk.set_appearance_mode("Dark")  # Modos: "System" (estándar), "Dark", "Light"
+ctk.set_default_color_theme("blue")  # Temas: "blue" (estándar), "green", "dark-blue"
 
-        #Variables de la interfaz
-        self.ruta_actual = tk.StringVar(value=str(FILESERVER_LOCAL))
-        self.forzar_var = tk.BooleanVar(value=False)
 
+class VentanaPipeline(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Pipeline P&C — Codelco (Edición Moderna)")
+        self.geometry("900x680")
+        self.minsize(800, 600)
+
+        # Variables de estado
+        self._ejecutando = False
+        self.historial_db = GestorHistorial()
+
+        self._configurar_estilo_tablas()
         self._crear_interfaz()
-    
+        self._cargar_historial()
+
+        # Confirmación al cerrar
+        self.protocol("WM_DELETE_WINDOW", self._al_cerrar_ventana)
+
+    def _configurar_estilo_tablas(self):
+        """CustomTkinter no tiene tablas nativas, así que adaptamos ttk.Treeview al modo oscuro."""
+        style = ttk.Style(self)
+        style.theme_use("default")
+        style.configure("Treeview", 
+                        background="#2b2b2b", foreground="white", 
+                        fieldbackground="#2b2b2b", borderwidth=0, font=("Segoe UI", 10))
+        style.map("Treeview", background=[("selected", "#1f538d")])
+        style.configure("Treeview.Heading", 
+                        background="#565b5e", foreground="white", 
+                        relief="flat", font=("Segoe UI", 10, "bold"))
+
     def _crear_interfaz(self):
-        #--- Pestaña de configuración ---
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # --- Pestañas ---
+        self.tabview = ctk.CTkTabview(self, corner_radius=10)
+        self.tabview.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
 
-        pestana_ejecucion = ttk.Frame(notebook)
-        pestana_historial = ttk.Frame(notebook)
+        self.tab_ejecutar = self.tabview.add("▶ Ejecutar Pipeline")
+        self.tab_historial = self.tabview.add("⏱ Historial de Ejecuciones")
 
-        notebook.add(pestana_ejecucion, text="Ejecutar Pipeline")
-        notebook.add(pestana_historial, text="Historial de Ejecuciones")
+        self._crear_tab_ejecutar()
+        self._crear_tab_historial()
 
-        #pestaña de ejecucion
+    # ==================================================================
+    # PESTAÑA 1: EJECUTAR
+    # ==================================================================
+    def _crear_tab_ejecutar(self):
+        frame = self.tab_ejecutar
 
-        #1 Marco de configuracion 
-        frame_config = ttk.LabelFrame(pestana_ejecucion, text= "Configuracion")
-        frame_config.pack(fill=tk.X, padx=10, pady=10)
+        # --- Controles ---
+        frame_config = ctk.CTkFrame(frame, corner_radius=10)
+        frame_config.pack(fill=tk.X, padx=10, pady=(10, 5))
 
-        #fila de ruta
-        frame_ruta = ttk.Frame(frame_config)
-        frame_ruta.pack(fill=tk.X, padx=10, pady=5)
+        # Fila 1: Ruta
+        lbl_ruta = ctk.CTkLabel(frame_config, text="Ruta de datos:", font=("Segoe UI", 12, "bold"))
+        lbl_ruta.grid(row=0, column=0, padx=15, pady=(15, 5), sticky="w")
 
-        ttk.Label(frame_ruta, text="Ruta de datos:").pack(side=tk.LEFT)
-        entrada_ruta =  ttk.Entry(frame_ruta, textvariable=self.ruta_actual, width=70)
-        entrada_ruta.pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_ruta, text="Examinar...", command=self._seleccionar_carpeta).pack(side=tk.LEFT)
+        self.var_ruta = tk.StringVar(value=str(FILESERVER_LOCAL))
+        entry_ruta = ctk.CTkEntry(frame_config, textvariable=self.var_ruta, width=500)
+        entry_ruta.grid(row=0, column=1, padx=5, pady=(15, 5), sticky="we")
 
-        #fila de botones rapidos
-        frame_botones_ruta = ttk.Frame(frame_config)
-        frame_botones_ruta.pack(fill=tk.X, padx=10, pady=0)
-        ttk.Button(frame_botones_ruta, text="Usar ruta local", command=lambda: self.ruta_actual.set(str(FILESERVER_LOCAL))).pack(side=tk.LEFT, padx=(85,5))
-        ttk.Button(frame_botones_ruta, text="Usar ruta produccion", command=lambda: self.ruta_actual.set(str(FILESERVER_PRODUCCION))).pack(side=tk.LEFT)
+        btn_examinar = ctk.CTkButton(frame_config, text="Examinar...", width=100, command=self._seleccionar_carpeta, fg_color="#4a4a4a", hover_color="#333333")
+        btn_examinar.grid(row=0, column=2, padx=15, pady=(15, 5))
 
-        #Checkbox Forzar
-        ttk.Checkbutton(frame_config, text="Forzar reprocesamiento (ignorar fechas de modificacion)", variable=self.forzar_var).pack(anchor=tk.W, padx=10, pady=10)
+        # Fila 2: Botones rápidos
+        frame_botones_ruta = ctk.CTkFrame(frame_config, fg_color="transparent")
+        frame_botones_ruta.grid(row=1, column=1, sticky="w", padx=5)
 
-        #boton ejecutar
-        self.btn_ejecutar = ttk.Button(pestana_ejecucion, text="▶ Ejecutar Pipeline", command=self.iniciar_pipeline)
-        self.btn_ejecutar.pack(pady=10)
+        ctk.CTkButton(frame_botones_ruta, text="Ruta Local", width=120, height=24, fg_color="#2b2b2b", hover_color="#4a4a4a", command=lambda: self.var_ruta.set(str(FILESERVER_LOCAL))).pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkButton(frame_botones_ruta, text="Ruta Producción", width=120, height=24, fg_color="#2b2b2b", hover_color="#4a4a4a", command=lambda: self.var_ruta.set(str(FILESERVER_PRODUCCION))).pack(side=tk.LEFT)
 
-        #2. Barra de progreso
-        self.progreso = ttk.Progressbar(pestana_ejecucion, orient=tk.HORIZONTAL, mode='determinate')
-        self.progreso.pack(fill=tk.X, padx=10, pady=10)
+        # Fila 3: Checkbox Forzar
+        self.var_forzar = tk.BooleanVar(value=False)
+        chk_forzar = ctk.CTkCheckBox(frame_config, text="Forzar reprocesamiento (ignorar fechas de modificación)", variable=self.var_forzar)
+        chk_forzar.grid(row=2, column=1, sticky="w", padx=5, pady=(15, 15))
+
+        # --- Botón de Ejecución (Grande y llamativo) ---
+        self.btn_ejecutar = ctk.CTkButton(frame, text="INICIAR EXTRACCIÓN P&C", height=40, font=("Segoe UI", 14, "bold"), fg_color="#28a745", hover_color="#218838", command=self._iniciar_ejecucion)
+        self.btn_ejecutar.pack(pady=15)
+
+        # --- Progreso ---
+        self.barra_progreso = ctk.CTkProgressBar(frame, height=12, corner_radius=5)
+        self.barra_progreso.pack(fill=tk.X, padx=20)
+        self.barra_progreso.set(0)
+
+        self.lbl_estado = ctk.CTkLabel(frame, text="Esperando instrucciones...", text_color="gray")
+        self.lbl_estado.pack(anchor="w", padx=20, pady=5)
+
+        # --- Consola Log ---
+        self.txt_log = ctk.CTkTextbox(frame, font=("Consolas", 12), fg_color="#0d0d0d", text_color="#cccccc", corner_radius=10)
+        self.txt_log.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.txt_log.configure(state=tk.DISABLED)
+
+        # Etiquetas de color del código original
+        self.txt_log.tag_config("ok", foreground="#4ec94e")
+        self.txt_log.tag_config("error", foreground="#e74c3c")
+        self.txt_log.tag_config("omitido", foreground="#888888")
+        self.txt_log.tag_config("info", foreground="#5dade2")
+        self.txt_log.tag_config("exito_resumen", foreground="#2ecc71")
+
+    # ==================================================================
+    # PESTAÑA 2: HISTORIAL
+    # ==================================================================
+    def _crear_tab_historial(self):
+        frame = self.tab_historial
+
+        # Botón actualizar
+        ctk.CTkButton(frame, text="↻ Actualizar Base de Datos", width=200, fg_color="#1f538d", command=self._cargar_historial).pack(pady=10, anchor="w", padx=10)
+
+        # Tabla Ejecuciones
+        frame_ejec = ctk.CTkFrame(frame)
+        frame_ejec.pack(fill=tk.X, padx=10, pady=5)
         
-        self.lbl_estado = ttk.Label(pestana_ejecucion, text="Esperando ejecucion...")
-        self.lbl_estado.pack(anchor=tk.W, padx=10)
+        cols = ("ID", "Fecha", "Estado", "OK", "Errores", "Duración")
+        self.tree_ejec = ttk.Treeview(frame_ejec, columns=cols, show="headings", height=8)
+        anchos = {"ID": 50, "Fecha": 150, "Estado": 100, "OK": 80, "Errores": 80, "Duración": 100}
+        
+        for c in cols:
+            self.tree_ejec.heading(c, text=c)
+            self.tree_ejec.column(c, width=anchos[c], anchor=tk.CENTER)
+            
+        self.tree_ejec.pack(fill=tk.X, padx=5, pady=5)
+        self.tree_ejec.bind("<<TreeviewSelect>>", self._al_seleccionar_ejecucion)
 
-        #3.Consola de salia
+        # Tabla Detalle
+        lbl_det = ctk.CTkLabel(frame, text="Detalles de los archivos procesados (Seleccione arriba):", font=("Segoe UI", 12, "bold"))
+        lbl_det.pack(anchor="w", padx=15, pady=(15, 0))
 
-        frame_consola = ttk.LabelFrame(pestana_ejecucion, text="Registro de actividad")
-        frame_consola.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame_det = ctk.CTkFrame(frame)
+        frame_det.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        #el recuadro negro con letras verdes
-        self.consola = scrolledtext.ScrolledText(frame_consola, bg="black", fg="green", font=("Consolas", 10), state=tk.DISABLED)
-        self.consola.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        cols_det = ("Archivo", "Carpeta", "Estado", "D2", "PF", "Error")
+        self.tree_det = ttk.Treeview(frame_det, columns=cols_det, show="headings")
+        anchos_det = {"Archivo": 250, "Carpeta": 100, "Estado": 80, "D2": 50, "PF": 50, "Error": 200}
+        
+        for c in cols_det:
+            self.tree_det.heading(c, text=c)
+            self.tree_det.column(c, width=anchos_det[c], anchor=tk.W if c in ("Archivo", "Error") else tk.CENTER)
 
+        self.tree_det.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-    #funciones de los botones
+    # ==================================================================
+    # LÓGICA DE EJECUCIÓN
+    # ==================================================================
     def _seleccionar_carpeta(self):
-        carpeta= filedialog.askdirectory(initialdir=self.ruta_actual.get())
+        carpeta = filedialog.askdirectory(initialdir=self.var_ruta.get())
         if carpeta:
-            self.ruta_actual.set(carpeta)
-    
-    def escribir_consola(self, mensaje):
-        """Escribe texto en la pantalla negra de la interfaz"""
-        self.consola.config(state=tk.NORMAL)
-        self.consola.insert(tk.END, mensaje + "\n")
-        self.consola.see(tk.END)#auto-scroll hacia abajo
-        self.consola.config(state=tk.DISABLED)
+            self.var_ruta.set(carpeta)
 
-    def iniciar_pipeline(self):
-        """bloquea el boton y arranca el motor en segundo plano"""
-        ruta_elegida = Path(self.ruta_actual.get())
-
-        if not ruta_elegida.exists():
-            self.escribir_consola(f"[ERROR] La ruta no existe: {ruta_elegida}")
-            return
-        #bloqueamos la interfaz para que el usuario no haga clicks
-        self.btn_ejecutar.config(state=tk.DISABLED)
-        self.progreso['value'] = 0
-        self.consola.config(state=tk.NORMAL)
-        self.consola.delete(1.0, tk.END)#limpiamos consola
-        self.consola.config(state=tk.DISABLED)
-
-        self.escribir_consola("---INICIANDO EXTRACCION P&C ---")
-
-        #arrancamos el procesador en un hilo (Thread) separado
-        hilo = threading.Thread(target=self._tarea_en_segundo_plano, args=(ruta_elegida,))
-        hilo.start()
-    def _tarea_en_segundo_plano(self, ruta):
-        """Esta funcion ejecuta el motor real sin congelar la ventana """
-        try:
-            #iniciamos el motor recien terminado
-            procesador = ProcesadorPrincipal(
-                ruta_base=ruta,
-                forzar=self.forzar_var.get(),
-                on_progreso=self._actualizar_desde_motor #le pasamos esta funcion para que nos avise
-
-            )
-            resultado = procesador.ejecutar()
-
-            #Resumen Final
-            self.escribir_consola("\n" + "=" * 60)
-            self.escribir_consola(f"RESULTADO: {resultado['estado'].upper()} -{resultado['stats']['total_procesados']} procesado(s)")
-            self.escribir_consola(f"Duracion: {resultado['duracion']} segundos")
-
-            self.lbl_estado.config(text="Ejecucion finalizada")
-            self.progreso['value'] = 100 #se llena la barra final
+    def _iniciar_ejecucion(self):
+        if self._ejecutando: return
         
+        ruta = Path(self.var_ruta.get().strip())
+        if not ruta.exists():
+            messagebox.showerror("Error", "La ruta especificada no existe.")
+            return
+
+        self._ejecutando = True
+        self.btn_ejecutar.configure(state=tk.DISABLED, text="PROCESANDO...", fg_color="#5a5a5a")
+        self.barra_progreso.set(0)
+        self.lbl_estado.configure(text="Arrancando motor...", text_color="white")
+        
+        self.txt_log.configure(state=tk.NORMAL)
+        self.txt_log.delete("1.0", tk.END)
+        self.txt_log.configure(state=tk.DISABLED)
+
+        self._log("=== PIPELINE P&C INICIADO ===", "info")
+        self._log(f"Ruta: {ruta}", "info")
+
+        hilo = threading.Thread(target=self._hilo_procesador, args=(ruta, self.var_forzar.get()), daemon=True)
+        hilo.start()
+
+    def _hilo_procesador(self, ruta, forzar):
+        try:
+            # INSTANCIAMOS EL MOTOR NUEVO
+            motor = ProcesadorPrincipal(ruta_base=ruta, forzar=forzar, on_progreso=self._recibir_progreso)
+            resultado = motor.ejecutar()
+            self.after(0, self._mostrar_resumen, resultado)
         except Exception as e:
-            self.escribir_consola(f"\n [ERROR CRITICO] {str(e)}")
-            self.lbl_estado.config(text="Error en la ejecucion")
-
+            self.after(0, self._log, f"ERROR CRÍTICO: {e}", "error")
         finally:
-            #reactivamos el boton de ejecutar
-            self.btn_ejecutar.config(state=tk.NORMAL)
+            self.after(0, self._finalizar_interfaz)
 
-    def _actualizar_desde_motor(self, evento):
-        """El motor llama a esta funcion cada vez que procesa un archivo"""
-        tipo = evento.get("tipo")
+    def _recibir_progreso(self, evento):
+        self.after(0, self._procesar_evento, evento)
+
+    def _procesar_evento(self, evento):
+        tipo = evento["tipo"]
+        hora = datetime.now().strftime("%H:%M:%S")
 
         if tipo == "inicio":
-            self.progreso['maximum'] = evento['total_archivos']   
-        elif tipo == "archivo_ok":
-            self.progreso['value'] += 1
-            msg = f"✓ {evento['nombre']} (D2: {evento['filas_d2']} | PF: {evento['filas_pf']})"
-            self.escribir_consola(msg)
-        elif tipo == "archivo_omitido":
-            self.progreso['value'] += 1
-            self.escribir_consola(f"⚠ {evento['nombre']} - Omitido (no modificado)")
-        elif tipo == "archivo_error":
-            self.progreso['value'] += 1
-            self.escribir_consola(f"✗ {evento['nombre']} - ERROR: {evento['error']}")
+            self._total_archivos = evento["total_archivos"]
+            self._procesados_actuales = 0
+            self._log(f"Se detectaron {self._total_archivos} archivos.", "info")
+            
+        elif tipo in ["archivo_ok", "archivo_error", "archivo_omitido", "archivo_sin_datos"]:
+            self._procesados_actuales += 1
+            if hasattr(self, '_total_archivos') and self._total_archivos > 0:
+                avance = self._procesados_actuales / self._total_archivos
+                self.barra_progreso.set(avance)
+                self.lbl_estado.configure(text=f"Procesando: {evento['nombre']} ({self._procesados_actuales}/{self._total_archivos})")
+
+            if tipo == "archivo_ok":
+                self._log(f"{hora} [OK] {evento['nombre']} (D2:{evento['filas_d2']} | PF:{evento['filas_pf']})", "ok")
+            elif tipo == "archivo_omitido":
+                self._log(f"{hora} [OMITIDO] {evento['nombre']}", "omitido")
+            elif tipo == "archivo_error":
+                self._log(f"{hora} [ERROR] {evento['nombre']}: {evento['error']}", "error")
+
         elif tipo == "parquet_escrito":
-            self.escribir_consola(f"Archivo {evento['tipo_hoja']}.parquet: {evento['filas']} filas escritas")
+            self._log(f"{hora} [PARQUET] {evento['tipo_hoja']}.parquet guardado ({evento['filas']} filas)", "info")
+
+    def _mostrar_resumen(self, res):
+        self._log("\n" + "="*50, "info")
+        self._log(f"RESULTADO: {res['estado'].upper()} - {res['stats']['total_procesados']} procesados", "exito_resumen")
+        self._log(f"Tiempo total: {res['duracion']} segundos", "info")
+
+    def _finalizar_interfaz(self):
+        self._ejecutando = False
+        self.btn_ejecutar.configure(state=tk.NORMAL, text="INICIAR EXTRACCIÓN P&C", fg_color="#28a745")
+        self.lbl_estado.configure(text="Ejecución finalizada.", text_color="gray")
+        self.barra_progreso.set(1.0)
+        self._cargar_historial()
+    def _log(self, texto: str, tag: str = "") -> None:
+        """Agrega una línea al registro de actividad con un tag de color opcional."""
+        self.txt_log.configure(state=tk.NORMAL)
+        if tag:
+            self.txt_log.insert(tk.END, texto + "\n", tag)
+        else:
+            self.txt_log.insert(tk.END, texto + "\n")
+        self.txt_log.see(tk.END)
+        self.txt_log.configure(state=tk.DISABLED)
+    # ==================================================================
+    # LÓGICA DE HISTORIAL (SQLITE)
+    # ==================================================================
+    def _cargar_historial(self):
+        for i in self.tree_ejec.get_children(): self.tree_ejec.delete(i)
+        for i in self.tree_det.get_children(): self.tree_det.delete(i)
+
+        try:
+            regs = self.historial_db.obtener_historial_reciente()
+            for r in regs:
+                fecha = r['fecha_inicio'][:19].replace('T', ' ')
+                dur = f"{r['duracion_segundos']:.1f}s" if r['duracion_segundos'] else "-"
+                self.tree_ejec.insert("", tk.END, iid=str(r['id']), values=(r['id'], fecha, r['estado'].upper(), r['archivos_exitosos'], r['archivos_error'], dur))
+        except Exception as e:
+            print(f"Error cargando base de datos: {e}")
+
+    def _al_seleccionar_ejecucion(self, event):
+        seleccion = self.tree_ejec.selection()
+        if not seleccion: return
+        ej_id = int(seleccion[0])
+
+        for i in self.tree_det.get_children(): self.tree_det.delete(i)
+
+        try:
+            archivos = self.historial_db.obtener_detalles_archivo(ej_id)
+            for a in archivos:
+                self.tree_det.insert("", tk.END, values=(a['nombre_archivo'], a['carpeta_version'], a['estado'], a['filas_d2'], a['filas_pf'], a['mensaje_error']))
+        except Exception:
+            pass
+
+    # ==================================================================
+    # SEGURIDAD AL CERRAR
+    # ==================================================================
+    def _al_cerrar_ventana(self):
+        if self._ejecutando:
+            if not messagebox.askyesno("Ejecución en curso", "El motor está procesando datos.\n¿Seguro que deseas forzar el cierre?"):
+                return
+        self.destroy()
+
 if __name__ == "__main__":
-    ventana = tk.Tk()
-    app = AplicacionGUI(ventana)
-    ventana.mainloop()
+    app = VentanaPipeline()
+    app.mainloop()
