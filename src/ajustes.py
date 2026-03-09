@@ -55,7 +55,7 @@ HOJA_PF = "PF"
 #metadatos y validacion
 #ID_BLANCO: la clave para el modelo dimensional de PowerBI
 COL_VALIDACION = "ID_BLANCO"
-#columnas para auditoria
+COL_VALIDACION_PF = "BLANCO" 
 COL_VERSION = "_version_presupuesto"
 COL_PROYECTO = "_codigo_proyecto"
 COL_ARCHIVO = "_nombre_archivo"
@@ -65,3 +65,33 @@ COL_FECHA_EXTRACCION = "_fecha_extraccion"
  
 #molde de columnas
 ARCHIVO_BASE = "00Base.xlsx" 
+COLUMNAS_BASE_D2 = [ 
+    "AUXILIAR_2",
+    "AUXILIAR_3",
+    "AUXILIAR_4",
+    "AUXILIAR_5",
+    "AUXILIAR_6",
+    "Llave S",
+    "MONEDA BASE",
+    "GASTO / PPT",
+    "FEE",
+    "ARTÍCULO",
+    "MONEDA",
+    "KEY",
+    "DESCRIPCION",
+    "CODIGO PROVEEDOR",
+    "NOMBRE PROVEEDOR",
+    "ID_BLANCO",
+    "UN",
+    "CTD",
+    "FE_INI",
+    "FE_FIN",
+    "MES",
+    "PRECIO UNITARIO (CLP $)",
+    "PRECIO UNITARIO (US$)",
+    "TOTAL (US$)",
+    "GRAFO"
+]
+COLUMNAS_BASE_PF = [
+    "KEY","AUX_1", "AUX_2", "AUX_3", "GESTIÓN", "ZONA", "BLANCO",
+    "SONDA", "MÉTODO", "CLASIF", "CTD", "FE_INI", "FE_FIN", "RENDIMIENTO CAMPAÑA", "TOTAL"]

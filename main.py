@@ -2,7 +2,7 @@
 import argparse
 import sys
 from src.ajustes import FILESERVER_LOCAL, FILESERVER_PRODUCCION
-from src.procesador_principal import ProcesadorPrincipa
+from src.procesador_principal import ProcesadorPrincipal
 def main() -> None:
     #1. Configuracion de argumentos de la terminal
     parser = argparse.ArgumentParser(
