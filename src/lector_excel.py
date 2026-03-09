@@ -19,10 +19,6 @@ from src.ajustes import (
     COLUMNAS_BASE_PF
 
 )
-_MESES_ES = {
-    1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
-    7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic",
-}
 class EstructuraExcelError(Exception):
     """Error personalizado para fallos de estructura en los archivos de la mineria"""
     pass
@@ -49,17 +45,28 @@ class LectorExcel:
         return match.group(1) if match else nombre_archivo
 
     def _formatear_columna_fecha(self, col):
-        """Normaliza nombres de columna tipo fecha a 'ene-2024'."""
+        """
+        Toma una columna de Excel (Date o String) y la convierte en 'AAAA-MM-DD'
+        asegurando que sea el ÚLTIMO día de ese mes (Estándar Codelco).
+        """
+        target_date = None
+        #caso a: pandas ya lo detecto como fecha / timestamp
         if isinstance(col, (Timestamp, datetime)):
-            return f"{_MESES_ES[col.month]}-{col.year}"
-        if isinstance(col, str):
+            target_date = pd.Timestamp(col)
+        #caso b: viene como string (ej: "2024-01-31" 00:00:00)
+        elif isinstance(col, str):
             try:
-                dt = datetime.strptime(col, "%Y-%m-%d %H:%M:%S")
-                return f"{_MESES_ES[dt.month]}-{dt.year}"
+                #intentamos parsear el formato datetime estandar
+                target_date = pd.to_datetime(col, format="%Y-%m-%d %H:%M:%S")
             except ValueError:
-                return col
+                return col  # Si no es parseable, lo dejamos como está (podría ser un título de columna normal)
+        if target_date:
+            #pandas: 'monthEnd(0)' garantiza que vamos al final del mes
+            #si ya es el dia final (ej:31), no cambia nada; si es un dia intermedio (ej: 2024-01-15), lo ajusta al final del mes (2024-01-31)
+            last_day = target_date + pd.offsets.MonthEnd(0)
+            return last_day.strftime("%Y-%m-%d") #devolvemos AAAA-MM-DD como string para evitar problemas de tipo en parquet
         return col
-
+    
     def _desduplicar_columnas(self, df: pd.DataFrame) -> pd.DataFrame:
         """Renombra columnas duplicadas con sufijos numéricos."""
         columnas = list(df.columns)
@@ -124,8 +131,8 @@ class LectorExcel:
                 
         # 2. ADVERTENCIA: Columnas inventadas (Ignorando las fechas)
         if sobrantes:
-            # Esta regla detecta formatos como "ene-2024", "feb-2025", o "ene-2024_1" (desduplicados)
-            patron_fecha = re.compile(r"^(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)-\d{4}(_\d+)?$")
+           # Nuevo Regex estricto para AAAA-MM-DD
+            patron_fecha = re.compile(r"^\d{4}-\d{2}-\d{2}(_\d+)?$")  # Permite también sufijos de desduplicación como _1, _2, etc.
             
             sobrantes_reales = []
             for c in sobrantes:
@@ -143,6 +150,29 @@ class LectorExcel:
                 sobrantes_str = ", ".join(sobrantes_reales[:5])
                 print(f"  [ADVERTENCIA] '{ruta_archivo.name}' -> La hoja '{nombre_hoja}' tiene {len(sobrantes_reales)} columnas no reconocidas (Ej: {sobrantes_str}). El motor las ignorará.")
 
+    def _sanitizar_para_parquet(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Escudo final: Convierte tipos de datos conflictivos (como fechas y tiempos mezclados) 
+        a texto ISO 8601 para que PyArrow (Parquet) los guarde automáticamente sin explotar.
+        """
+        for col in df.columns:
+            # 1. Si detectamos una columna pura de fechas, forzamos el formato ISO AAAA-MM-DD
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df[col] = df[col].dt.strftime('%Y-%m-%d')
+                
+            # 2. Si la columna es "mixta" (texto, números y fechas mezcladas)
+            elif df[col].dtype == 'object':
+                # Convertimos las fechas ocultas a formato ISO AAAA-MM-DD
+                df[col] = df[col].apply(
+                    lambda x: x.strftime('%Y-%m-%d') if isinstance(x, (datetime, Timestamp)) 
+                    else x
+                )
+                # Blindaje PyArrow: Forzamos toda la basura mixta a texto, 
+                # devolviendo los "vacíos" a estado nulo para la base de datos.
+                df[col] = df[col].astype(str).replace({'nan': None, 'NaT': None, 'None': None, '<NA>': None})
+                
+        return df
+
     # ---------------------------------------------------------
     # ACTUALIZACIÓN: LECTOR GENERAL (Sirve para D2 y PF)
     # ---------------------------------------------------------
@@ -157,47 +187,58 @@ class LectorExcel:
             return None
 
         if df.empty: return None
-
+        #1. Limpieza base de filas vacias antes de formatear titulos
+        df = df.dropna(how="all")
+    
         self._validar_encabezados(df, ruta_archivo, nombre_hoja)
+        #2. formateo de titulos y estandarizacion ISO
         df.columns = [self._formatear_columna_fecha(col) for col in df.columns]
         df = self._desduplicar_columnas(df)
-        df = df.dropna(how="all")
-
-        if df.empty: return None
-        
-        # APLICAMOS EL NUEVO ESCUDO DE ESQUEMA
+        #3. validacion de esquema
         self._validar_esquema_columnas(df, columnas_esperadas, nombre_hoja, ruta_archivo)
-
-        # EL FILTRO DE LLAVE AHORA ES DINÁMICO (id_blanco para D2, BLANCO para PF)
+        #4. Slicing extremo: identificar solo lo que su queremos guardar
+        # 4. SLICING EXTREMO Y ORDENAMIENTO PERFECTO
+        # 4.1. Rescatamos las columnas base manteniendo su orden original estricto
+        cols_base_ordenadas = [c for c in columnas_esperadas if c in df.columns]
+        
+        # 4.2. Detectamos las fechas ISO y las ordenamos cronológicamente (de menor a mayor)
+        patron_fecha_iso = re.compile(r"^\d{4}-\d{2}-\d{2}(_\d+)?$")
+        cols_fechas_iso = [c for c in df.columns if patron_fecha_iso.match(str(c))]
+        cols_fechas_iso.sort() # Esto garantiza que 2024 aparezca antes que 2025
+        
+        # 4.3. Unimos las listas: Primero los datos estáticos, al final la línea de tiempo
+        cols_finales_ordenadas = cols_base_ordenadas + cols_fechas_iso
+        
+        # Recortamos el DataFrame aplicando el nuevo orden
+        df = df[cols_finales_ordenadas]
+        #5. filtro de llave principal (filtro nulls)
         if col_validacion not in df.columns:
             raise EstructuraExcelError(
-                f"Falta la columna clave '{col_validacion}' en la hoja '{nombre_hoja}'. "
+                f"Falta columna clave '{col_validacion}' en la hoja '{nombre_hoja}'. "
                 f"SOLUCIÓN: Verifique que el título esté escrito exactamente así, sin espacios."
             )
-        
-        # Limpiamos basura
         df = df.dropna(subset=[col_validacion])
-
+        df[col_validacion] = df[col_validacion].astype(str).str.strip()
+        #si la columna clave existe pero esta vacia, pandas lo carga como null
+        #lo convertimos a string para asegurar consistencia de parquet
+        df = self._sanitizar_para_parquet(df)
         return df if not df.empty else None
-    
-    
+        
+
     def agregar_metadatos(self, df: pd.DataFrame, ruta_archivo: Path, version_presupuesto: str, fecha_modificacion: datetime) -> pd.DataFrame:
-        """Agrega columnas de auditoría optimizando la memoria de Pandas."""
+        """Agrega columnas de auditoría optimizando la fragmentación de memoria."""
         nombre_archivo = ruta_archivo.name
         
-        # Creamos un bloque con todas las columnas nuevas de golpe
         nuevas_columnas = pd.DataFrame({
             COL_VERSION: version_presupuesto,
             COL_PROYECTO: self.extraer_codigo_proyecto(nombre_archivo),
             COL_ARCHIVO: nombre_archivo,
             COL_RUTA_ARCHIVO: str(ruta_archivo),
-            COL_FECHA_MODIF: fecha_modificacion.isoformat(),
-            COL_FECHA_EXTRACCION: datetime.now().isoformat()
+            COL_FECHA_MODIF: pd.Timestamp(fecha_modificacion).isoformat(),
+            COL_FECHA_EXTRACCION: pd.Timestamp.now().isoformat()
         }, index=df.index)
         
-        # Las pegamos al DataFrame original en una sola operación (cero fragmentación)
         return pd.concat([df, nuevas_columnas], axis=1)
-
 # ---------------------------------------------------------
     # ACTUALIZACIÓN: ORQUESTADOR
     # ---------------------------------------------------------

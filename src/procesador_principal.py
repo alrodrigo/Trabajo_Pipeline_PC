@@ -42,7 +42,11 @@ class ProcesadorPrincipal:
     def ejecutar(self) -> dict:
         """Función maestra que corre todo el proceso."""
         inicio_tiempo = time.time()
-        
+        if self.forzar:
+            print("\n🧹 MODO FORZADO: Destruyendo Parquets antiguos por seguridad...")
+            # RUTA_PARQUET_D2.parent nos da la carpeta exacta donde viven tus Parquets
+            carpeta_salida = RUTA_PARQUET_D2.parent 
+            self.escritor.limpiar_outputs_antiguos(carpeta_salida)
         # 1. Registrar inicio en BD
         id_ejecucion = self.historial.registrar_inicio_ejecucion()
         

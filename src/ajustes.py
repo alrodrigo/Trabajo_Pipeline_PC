@@ -66,6 +66,7 @@ COL_FECHA_EXTRACCION = "_fecha_extraccion"
 #molde de columnas
 ARCHIVO_BASE = "00Base.xlsx" 
 COLUMNAS_BASE_D2 = [ 
+    "AUXILIAR_1",
     "AUXILIAR_2",
     "AUXILIAR_3",
     "AUXILIAR_4",
